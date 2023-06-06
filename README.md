@@ -1,18 +1,16 @@
 # Slap
 > slugbyte lil arg parser
 
-$ program (--something) <1 arg> (-s) <no arg> something  <many args>
+## About
+I am just learning zig and wanted to build an arg parser to help myself better learn 
+how to create data types with `comptime` :) This is my first zig lib and I don't
+really recommend using it due to the fact that I don't really know zig yet :)
 
+I made this public just because It might be useful as reference code to other
+zig noobs like my self :)
 
-SlapData .{
-  "argName": {
-      "present": bool,
-      "value": (bool, []const u8, [][]const u8),
-  },
-  "argName": (bool, []const u8, [][]const u8),
-  "argName": (bool, []const u8, [][]const u8),
-  "argName": (bool, []const u8, [][]const u8),
-}
+## Warning
+**This is a work in progress and should not be used for anything!**
 
 ## how it works?
 ```zig

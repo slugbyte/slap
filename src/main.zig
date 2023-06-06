@@ -193,6 +193,7 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
                     const arg = self.arg_list.items[j];
                     if (flag.eql(arg)) {
                         var prop = @field(self.data, field.name);
+                        @field(prop, "presence") = true;
 
                         const field_value = @field(prop, "value");
                         @field(prop, "value") = switch (@TypeOf(field_value)) {
@@ -210,6 +211,7 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
                             ?[][]const u8 => @as(?[][]const u8, null),
                             else => unreachable,
                         };
+                        @field(self.data, field.name) = prop;
                         // print("hiihihihi, {d} {s} {s}\n", .{ i, self.flag_list[i].name, field.name });
                         continue;
                     }
@@ -256,16 +258,20 @@ pub fn main() !void {
         },
     };
 
-    comptime var i = 0;
-    inline for (std.meta.fields(@TypeOf(slap.data))) |field| {
-        const field_value = @field(slap.data, field.name);
-        print("slap.data[{d}]: {s} = {any} (type {any})\n", .{ i, field.name, field_value, field.type });
-        i += 1;
-    }
+    // comptime var i = 0;
+    // inline for (std.meta.fields(@TypeOf(slap.data))) |field| {
+    //     const field_value = @field(slap.data, field.name);
+    //     print("slap.data[{d}]: {s} = {any} (type {any})\n", .{ i, field.name, field_value, field.type });
+    //     i += 1;
+    // }
     defer slap.deinit();
 
-    if (slap.data.lucky.value) {
+    if (slap.data.lucky.presence) {
         print("good luck!\n", .{});
+    }
+
+    if (slap.data.hello.presence) {
+        print("hello flag is present!\n", .{});
     }
 
     if (slap.data.hello.value) |name| {
