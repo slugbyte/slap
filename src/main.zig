@@ -35,11 +35,13 @@ const SlapKind = union(enum) {
         };
     }
 };
+
 const SlapFlag = struct {
     name: []const u8, // verbose aka --verbose
     short: ?u8 = null, // if 'v' aka -v
     help: []const u8, // turn on verbose loging
     kind: SlapKind = SlapKind{ .Bool = false }, // .Bool
+    is_required: bool = false,
 
     pub fn eql(self: *const SlapFlag, text: []const u8) bool {
         const hyphen_name_len = self.name.len + 2;
@@ -64,57 +66,74 @@ const SlapFlag = struct {
     }
 };
 
+pub fn SlapArg(comptime flag: SlapFlag) type {
+    if (flag.name.len >= FLAG_NAME_MAX) {
+        @compileError("flag.name is too long");
+    }
+    // TODO add a referece to the SlapFlag (spec) on each SlapArg
+    var field_list: [4]StructField = undefined;
+    field_list[0] = .{
+        .name = "is_present",
+        .type = bool,
+        .is_comptime = false,
+        .alignment = @alignOf(bool),
+        .default_value = @ptrCast(*const anyopaque, &false),
+    };
+
+    field_list[1] = .{
+        .name = "is_valid",
+        .type = bool,
+        .is_comptime = false,
+        .alignment = @alignOf(bool),
+        .default_value = @ptrCast(*const anyopaque, &false),
+    };
+
+    field_list[2] = .{
+        .name = "slap_flag",
+        .type = *SlapFlag,
+        .is_comptime = true,
+        .alignment = @alignOf(*SlapFlag),
+        .default_value = @ptrCast(*const anyopaque, &&flag),
+    };
+
+    const field_type = flag.kind.ToType();
+    const default_value = switch (flag.kind) {
+        .Bool => |value| value,
+        .String => @as(field_type, null),
+        .StringList => @as(field_type, null),
+    };
+    const alignment = @alignOf(field_type);
+    field_list[3] = .{
+        .name = "value",
+        .type = field_type,
+        .is_comptime = false,
+        .alignment = alignment,
+        .default_value = @ptrCast(*const anyopaque, &default_value),
+    };
+
+    return @Type(.{
+        .Struct = .{
+            .decls = &.{},
+            .layout = .Auto,
+            .is_tuple = false,
+            .fields = &field_list,
+        },
+    });
+}
+
 pub fn Slap(comptime flag_list: []const SlapFlag) type {
     var fields: [flag_list.len]StructField = undefined;
     comptime var field_index = 0;
 
     inline while (field_index < fields.len) : (field_index += 1) {
         const flag = flag_list[field_index];
-
-        const presence_field: StructField = .{
-            .name = "presence",
-            .type = bool,
-            .is_comptime = false,
-            .alignment = @alignOf(bool),
-            .default_value = @ptrCast(*const anyopaque, &false),
-        };
-
-        if (flag.name.len >= FLAG_NAME_MAX) {
-            @compileError("flag.name is too long");
-        }
-        const field_type = flag.kind.ToType();
-        const default_value = switch (flag.kind) {
-            .Bool => |value| value,
-            .String => @as(field_type, null),
-            .StringList => @as(field_type, null),
-        };
-        const alignment = @alignOf(field_type);
-        const value_field: std.builtin.Type.StructField = .{
-            .name = "value",
-            .type = field_type,
-            .is_comptime = false,
-            .alignment = alignment,
-            .default_value = @ptrCast(*const anyopaque, &default_value),
-        };
-
-        const slap_data_field_list = [2]StructField{ presence_field, value_field };
-
-        //TODO create {presence, value struct}
-        const SlapDataField = @Type(.{
-            .Struct = .{
-                .decls = &.{},
-                .layout = .Auto,
-                .fields = &slap_data_field_list,
-                .is_tuple = false,
-            },
-        });
-
+        const FlagSlapArg = SlapArg(flag);
         fields[field_index] = .{
             .name = flag.name,
-            .type = SlapDataField,
+            .type = FlagSlapArg,
             .is_comptime = false,
-            .alignment = @alignOf(SlapDataField),
-            .default_value = @ptrCast(*const anyopaque, &@as(SlapDataField, .{})),
+            .alignment = @alignOf(FlagSlapArg),
+            .default_value = @ptrCast(*const anyopaque, &@as(FlagSlapArg, .{})),
         };
     }
 
@@ -129,6 +148,7 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
 
     return struct {
         const Self = @This();
+
         flag_list: []const SlapFlag,
         allocator: Allocator,
         slipup_list: ArrayList(Slipup),
@@ -145,8 +165,10 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
             errdefer arg_iterator.deinit();
 
             while (arg_iterator.next()) |arg| {
-                arg_list.append(arg) catch {
-                    return SlapErr.outOfMemory;
+                arg_list.append(arg) catch |err| {
+                    return switch (err) {
+                        Allocator.Error.OutOfMemory => SlapErr.outOfMemory,
+                    };
                 };
             }
 
@@ -159,60 +181,77 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
             };
 
             try result.parse();
-            // try result.validate();
+            // todo run valideate function
             return result;
         }
-
-        // fn validate(self: *Self) SlapErr!void {
-        //     // TODO: check that no duplicate flag
-        //
-        // }
 
         fn deinit(self: *Self) void {
             self.slipup_list.deinit();
             self.arg_list.deinit();
         }
 
-        // TODO fn parse
+        fn isArgAtIndexAFlag(self: *Self, index: usize) bool {
+            if (index >= self.arg_list.items.len) {
+                return false;
+            }
+            // can i used * and & ?
+            for (self.flag_list) |flag| {
+                const content = self.arg_list.items[index];
+                if (flag.eql(content)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        fn parseNextString(self: *Self, arg_list_index: *usize) ?[]const u8 {
+            const value_index: usize = arg_list_index.* + 1;
+            if (value_index >= self.arg_list.items.len) {
+                return @as(?[]const u8, null);
+            }
+            arg_list_index.* = value_index;
+            return @as(?[]const u8, self.arg_list.items[value_index]);
+        }
+
+        fn parseNextStringList(self: *Self, arg_list_index: usize) ?[][]const u8 {
+            const start_index: usize = arg_list_index + 1;
+            var end_index: usize = start_index;
+            const not_found_result = @as(?[][]const u8, null);
+
+            while (!self.isArgAtIndexAFlag(end_index)) : (end_index += 1) {
+                if (end_index >= self.arg_list.items.len) {
+                    break;
+                }
+            }
+
+            if (start_index == end_index) {
+                return not_found_result;
+            }
+
+            return self.arg_list.items[start_index..end_index];
+        }
+
         fn parse(self: *Self) !void {
             const data_field_list = std.meta.fields(@TypeOf(self.data));
             comptime var i = 0;
-
             inline while (i < data_field_list.len) : (i += 1) {
                 const field = data_field_list[i];
-
-                const flag: SlapFlag = for (self.flag_list) |flag| {
-                    if (std.mem.eql(u8, field.name, flag.name)) {
-                        break flag;
-                    }
-                    // print("wat, {s} \n", .{flag.name});
-                } else unreachable;
+                const flag = @field(self.data, field.name).slap_flag.*;
 
                 var j: usize = 0;
                 while (j < self.arg_list.items.len) : (j += 1) {
                     const arg = self.arg_list.items[j];
                     if (flag.eql(arg)) {
-                        var prop = @field(self.data, field.name);
-                        @field(prop, "presence") = true;
-
-                        const field_value = @field(prop, "value");
-                        @field(prop, "value") = switch (@TypeOf(field_value)) {
-                            bool => true,
-                            ?[]const u8 => wat: {
-                                if ((j + 1) >= self.arg_list.items.len) {
-                                    // print("no more args after: {s}\n", .{arg});
-                                    break :wat @as(?[]const u8, null);
-                                }
-                                j += 1;
-                                const value = self.arg_list.items[j];
-                                // print("value for arg {s}:{s}", .{ arg, value });
-                                break :wat @as(?[]const u8, value);
-                            },
-                            ?[][]const u8 => @as(?[][]const u8, null),
+                        var arg_field = @field(self.data, field.name);
+                        @field(arg_field, "is_present") = true;
+                        @field(arg_field, "value") = switch (@TypeOf(@field(arg_field, "value"))) {
+                            bool => !flag.kind.Bool,
+                            ?[]const u8 => self.parseNextString(&j),
+                            ?[][]const u8 => self.parseNextStringList(j),
                             else => unreachable,
                         };
-                        @field(self.data, field.name) = prop;
-                        // print("hiihihihi, {d} {s} {s}\n", .{ i, self.flag_list[i].name, field.name });
+                        @field(self.data, field.name) = arg_field;
                         continue;
                     }
                 }
@@ -266,15 +305,24 @@ pub fn main() !void {
     // }
     defer slap.deinit();
 
-    if (slap.data.lucky.presence) {
+    if (slap.data.lucky.value) {
         print("good luck!\n", .{});
     }
 
-    if (slap.data.hello.presence) {
+    if (slap.data.hello.is_present) {
         print("hello flag is present!\n", .{});
+        if (slap.data.hello.value) |name| {
+            print("hello {s}!\n", .{name});
+        }
     }
 
-    if (slap.data.hello.value) |name| {
-        print("hello {s}!\n", .{name});
+    if (slap.data.goodbye.is_present) {
+        print("goodbye flag is present!\n", .{});
+        if (slap.data.goodbye.value) |goodbye_to_list| {
+            print("goodbye_to_list type {any}\n", .{@TypeOf(goodbye_to_list)});
+            for (goodbye_to_list) |to| {
+                print("goodbye {s}!\n", .{to});
+            }
+        }
     }
 }
