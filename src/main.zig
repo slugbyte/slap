@@ -19,10 +19,20 @@ const Slipup = struct {
     err: SlapErr,
 };
 
+// TODO test what happends when you use a hyphen is the SlapFlag spec?
+// --auth-type (bearer | oauth)
+// --protocol (udp | tcp | http)
+
+// What to solve to support enum?
+// SlapKind needs a Constructor that takes in a list of possible Enums to support
+//    (and potential names for those enums)
+// SlapType would also be created a comptile time
+
 const SlapKind = union(enum) {
     Bool: bool,
     String,
     StringList,
+    Enum,
     // Filepath
     // Integer
     // Float
@@ -194,7 +204,7 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
             if (index >= self.arg_list.items.len) {
                 return false;
             }
-            // can i used * and & ?
+
             for (self.flag_list) |flag| {
                 const content = self.arg_list.items[index];
                 if (flag.eql(content)) {
