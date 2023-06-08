@@ -32,7 +32,6 @@ const SlapKind = union(enum) {
     Bool: bool,
     String,
     StringList,
-    Enum,
     // Filepath
     // Integer
     // Float
@@ -46,37 +45,40 @@ const SlapKind = union(enum) {
     }
 };
 
-const SlapFlag = struct {
-    name: []const u8, // verbose aka --verbose
-    short: ?u8 = null, // if 'v' aka -v
-    help: []const u8, // turn on verbose loging
-    kind: SlapKind = SlapKind{ .Bool = false }, // .Bool
-    is_required: bool = false,
+fn SlapFlag() type {
+    return struct {
+        const Self = @This();
+        name: []const u8, // verbose aka --verbose
+        short: ?u8 = null, // if 'v' aka -v
+        help: []const u8, // turn on verbose loging
+        kind: SlapKind = SlapKind{ .Bool = false }, // .Bool
+        is_required: bool = false,
 
-    pub fn eql(self: *const SlapFlag, text: []const u8) bool {
-        const hyphen_name_len = self.name.len + 2;
-        var hyphen_name: [FLAG_NAME_MAX]u8 = undefined;
-        hyphen_name[0] = '-';
-        hyphen_name[1] = '-';
+        pub fn eql(self: *const Self, text: []const u8) bool {
+            const hyphen_name_len = self.name.len + 2;
+            var hyphen_name: [FLAG_NAME_MAX]u8 = undefined;
+            hyphen_name[0] = '-';
+            hyphen_name[1] = '-';
 
-        @memcpy(hyphen_name[2..hyphen_name_len], self.name);
+            @memcpy(hyphen_name[2..hyphen_name_len], self.name);
 
-        if (std.mem.eql(u8, hyphen_name[0..hyphen_name_len], text)) {
-            return true;
-        }
-
-        if (self.short) |short| {
-            const short_flag = [_:0]u8{ '-', short };
-            if (std.mem.startsWith(u8, text, &short_flag)) {
+            if (std.mem.eql(u8, hyphen_name[0..hyphen_name_len], text)) {
                 return true;
             }
+
+            if (self.short) |short| {
+                const short_flag = [_:0]u8{ '-', short };
+                if (std.mem.startsWith(u8, text, &short_flag)) {
+                    return true;
+                }
+            }
+
+            return false;
         }
+    };
+}
 
-        return false;
-    }
-};
-
-pub fn SlapArg(comptime flag: SlapFlag) type {
+pub fn SlapArg(comptime SlapFlagType: type, comptime flag: SlapFlagType) type {
     if (flag.name.len >= FLAG_NAME_MAX) {
         @compileError("flag.name is too long");
     }
@@ -100,9 +102,9 @@ pub fn SlapArg(comptime flag: SlapFlag) type {
 
     field_list[2] = .{
         .name = "slap_flag",
-        .type = *SlapFlag,
+        .type = *SlapFlagType,
         .is_comptime = true,
-        .alignment = @alignOf(*SlapFlag),
+        .alignment = @alignOf(*SlapFlagType),
         .default_value = @ptrCast(*const anyopaque, &&flag),
     };
 
@@ -131,13 +133,13 @@ pub fn SlapArg(comptime flag: SlapFlag) type {
     });
 }
 
-pub fn Slap(comptime flag_list: []const SlapFlag) type {
+pub fn Slap(comptime SlapFlagType: type, comptime flag_list: []const SlapFlagType) type {
     var fields: [flag_list.len]StructField = undefined;
     comptime var field_index = 0;
 
     inline while (field_index < fields.len) : (field_index += 1) {
         const flag = flag_list[field_index];
-        const FlagSlapArg = SlapArg(flag);
+        const FlagSlapArg = SlapArg(SlapFlagType, flag);
         fields[field_index] = .{
             .name = flag.name,
             .type = FlagSlapArg,
@@ -159,7 +161,7 @@ pub fn Slap(comptime flag_list: []const SlapFlag) type {
     return struct {
         const Self = @This();
 
-        flag_list: []const SlapFlag,
+        flag_list: []const SlapFlagType,
         allocator: Allocator,
         slipup_list: ArrayList(Slipup),
         arg_list: ArrayList([]const u8),
@@ -275,20 +277,22 @@ pub fn main() !void {
     defer arena.deinit();
     var alley = arena.allocator();
 
-    const flag_list = [_]SlapFlag{
-        SlapFlag{
-            .name = "lucky",
+    const SlapFlagType = SlapFlag();
+
+    const flag_list = [_]SlapFlagType{
+        SlapFlagType{
+            .name = "lucky", // --lucky
             .short = 'l',
             .kind = SlapKind{ .Bool = false },
             .help = "turn on more debug logs",
         },
-        SlapFlag{
+        SlapFlagType{
             .name = "hello",
             .short = 'h',
             .kind = .String,
             .help = "say hello to a string",
         },
-        SlapFlag{
+        SlapFlagType{
             .name = "goodbye",
             .short = 'g',
             .kind = .StringList,
@@ -296,7 +300,7 @@ pub fn main() !void {
         },
     };
 
-    var slap = Slap(flag_list[0..]).init(alley) catch |err| switch (err) {
+    var slap = Slap(SlapFlagType, flag_list[0..]).init(alley) catch |err| switch (err) {
         SlapErr.initError => {
             print("sry bub, unable to init slap!", .{});
             std.process.exit(1);
